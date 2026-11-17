@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loomwright – AI Story Co-Writer</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#12101a;--panel:#1b1826;--line:#2e2a40;--text:#e8e4f3;--mut:#9a93b3;--acc:#b68cff;--acc2:#ffcf6e;--bad:#ff7a8a;--ok:#6fe3b0;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,sans-serif}
+h1,h2{font-family:"Cormorant Garamond",Georgia,serif;margin:0}
+header{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+header h1{font-size:30px;color:var(--acc)}header span{color:var(--mut);font-size:13px}
+main{max-width:1100px;margin:0 auto;padding:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+.genres{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
+.genre{cursor:pointer;text-align:center;padding:14px 8px;border:1px solid var(--line);border-radius:12px;background:transparent;color:var(--text);font:inherit}
+.genre.on,.genre:hover{border-color:var(--acc);background:rgba(182,140,255,.14)}
+textarea{width:100%;min-height:80px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;resize:vertical}
+button.btn{background:var(--acc);color:#14101f;border:0;border-radius:10px;padding:10px 18px;font:600 14px Inter,sans-serif;cursor:pointer}
+button.btn:disabled{opacity:.5;cursor:wait}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;margin-top:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.story{font:500 20px/1.65 "Cormorant Garamond",Georgia,serif;min-height:160px}
+.story p{margin:0 0 14px}.uv{font:600 11px Inter,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--acc2)}
+.choices{display:grid;gap:8px;margin-top:10px}
+.choice{text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit;cursor:pointer;animation:f .5s both}
+.choice:hover{border-color:var(--acc)}
+@keyframes f{from{opacity:0;transform:translateY(6px)}}
+.side h2{font-size:20px;color:var(--acc2);margin-bottom:6px}.side section{margin-bottom:16px}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12px;color:var(--mut)}
+.small{font-size:13px;color:var(--mut)}.bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.issue{color:var(--bad);font-size:13px;margin:4px 0}.good{color:var(--ok);font-size:13px}
+.err{color:var(--bad);margin-top:10px}.pulse{animation:p 1.2s infinite}@keyframes p{50%{opacity:.4}}
+.dlg{margin-top:10px;font-size:14px}.dlg b{color:var(--acc)}
+svg{width:100%;height:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px}
+.hide{display:none}
+</style></head><body>
+<header><h1>Loomwright</h1><span>A co-writer that remembers your universe and never contradicts itself.</span></header>
+<main>
+<div id="setup" class="card">
+  <h2>Begin a story</h2>
+  <div class="small">Pick a genre, then give a premise (or leave blank for a surprise).</div>
+  <div class="genres" id="genres"></div>
+  <textarea id="premise" placeholder="A city built on the back of a sleeping giant, where the ferrymen are starting to feel it breathe…"></textarea>
+  <div class="bar"><button class="btn" id="go">Weave my world</button></div>
+  <div id="setupMsg"></div>
+</div>
+<div id="play" class="hide">
+  <div class="grid">
+    <div>
+      <div class="card">
+        <div class="story" id="story"></div>
+        <div class="choices" id="choices"></div>
+        <div id="msg"></div>
+        <div class="bar">
+          <button class="btn ghost" id="whatif">✦ What if… (parallel universe)</button>
+          <button class="btn ghost" id="dialogue">💬 Dialogue</button>
+          <button class="btn ghost" id="check">Check consistency</button>
+          <button class="btn ghost" id="restart">New story</button>
+        </div>
+        <div id="extras"></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h2>Story map</h2>
+        <div class="small" style="margin-bottom:8px">Each column is a universe; each dot is a scene.</div><div id="map"></div></div>
+    </div>
+    <div class="card side" id="side"></div>
+  </div>
+</div>
+</main>
+<script>
+const GENRES=[["🏰","Fantasy"],["🕵️","Noir"],["🚀","Sci-fi"],["🏚️","Horror"],["🌌","Multiverse"]];
+let genre="Fantasy",world=null,summary="",gs={inventory:[],relationships:{},flags:{}},
+    scenes=[],uv=0,uvNames=["Prime"],cur=null,busy=false;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// ---- talk to the Python backend ----
+async function api(path,body){
+  const r=await fetch("/api/"+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.detail||("Server error "+r.status));
+  return data;
+}
+
+$("genres").innerHTML=GENRES.map(g=>`<button class="genre${g[1]===genre?" on":""}" data-g="${g[1]}">${g[0]}<br>${g[1]}</button>`).join("");
+$("genres").onclick=e=>{const b=e.target.closest("[data-g]");if(!b)return;genre=b.dataset.g;
+  document.querySelectorAll(".genre").forEach(x=>x.classList.toggle("on",x===b))};
+
+function busyUI(on,txt){busy=on;document.querySelectorAll("button").forEach(b=>b.disabled=on);
+  $("msg").innerHTML=on?`<div class="small pulse">${txt}</div>`:""}
+
+$("go").onclick=async()=>{
+  $("go").disabled=true;$("setupMsg").innerHTML='<div class="small pulse">Weaving your world bible…</div>';
+  try{
+    world=await api("world",{premise:$("premise").value.trim()||"Surprise me with something original.",genre});
+    summary="The story has not begun.";gs={inventory:[],relationships:{},flags:{}};
+    scenes=[];uv=0;uvNames=["Prime"];cur=null;
+    $("setup").classList.add("hide");$("play").classList.remove("hide");
+    await scene("Begin the story with an opening scene.");
+  }catch(e){$("setupMsg").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+  $("go").disabled=false;
+};
+
+async function scene(choice,extra=""){
+  busyUI(true,"The narrator is writing…");
+  try{
+    const r=await api("scene",{world,summary,state:gs,choice,universe:uvNames[uv],extra});
+    gs=r.state;summary=r.summary;
+    scenes.push({id:scenes.length,parent:cur,uv,text:r.scene_text,choice});
+    cur=scenes.length-1;$("extras").innerHTML="";render(r.choices);
+  }catch(e){$("msg").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+  busyUI(false);
+}
+
+function render(choices){
+  const s=scenes[cur];
+  $("story").innerHTML=`<div class="uv">Universe: ${esc(uvNames[s.uv])}</div>`+esc(s.text).split(/\n+/).map(p=>`<p>${p}</p>`).join("");
+  $("choices").innerHTML=choices.map((c,i)=>`<button class="choice" style="animation-delay:${i*120}ms" data-c="${esc(c)}">${esc(c)}</button>`).join("");
+  $("side").innerHTML=`<section><h2>${esc(world.title)}</h2><div class="small">${esc(world.setting)}</div>
+  <div class="small" style="margin-top:6px"><b>Quest:</b> ${esc(world.goal)}</div></section>
+  <section><h2>Game state</h2><div class="small">Tracked in Python code, not by the AI.</div>
+  <div>${gs.inventory.map(i=>`<span class="tag">🎒 ${esc(i)}</span>`).join("")||'<span class="small">Empty pack</span>'}</div>
+  <div>${Object.entries(gs.relationships).map(([k,v])=>`<span class="tag">${esc(k)}: ${v>0?"+":""}${v}</span>`).join("")}</div>
+  <div>${Object.keys(gs.flags).map(f=>`<span class="tag">⚑ ${esc(f)}</span>`).join("")}</div></section>
+  <section><h2>World bible</h2>
+  ${world.characters.map(c=>`<div class="small"><b style="color:var(--text)">${esc(c.name)}</b> · ${esc(c.role)}</div>`).join("")}
+  <div class="small" style="margin-top:6px"><b style="color:var(--text)">Rules</b></div>
+  ${world.rules.map(r=>`<div class="small">• ${esc(r)}</div>`).join("")}</section>`;
+  drawMap();
+}
+$("choices").onclick=e=>{const b=e.target.closest("[data-c]");if(b&&!busy)scene(b.dataset.c)};
+
+$("whatif").onclick=async()=>{
+  if(busy||cur===null)return;busyUI(true,"Splitting reality…");
+  try{
+    const d=await api("whatif",{world,summary,last_scene:scenes[cur].text});
+    uvNames.push(d.name);uv=uvNames.length-1;busyUI(false);
+    await scene("Reality splits here.",`This is a parallel universe diverging from the previous scene: ${d.divergence}. Show the changed reality.`);
+  }catch(e){busyUI(false);$("msg").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+};
+$("check").onclick=async()=>{
+  if(busy||cur===null)return;busyUI(true,"Checking against the world bible…");
+  try{
+    const r=await api("check",{world,state:gs,scene_text:scenes[cur].text});
+    $("extras").innerHTML=(r.issues||[]).length?r.issues.map(i=>`<div class="issue">⚠ ${esc(i)}</div>`).join(""):'<div class="good">✓ Consistent with your world bible.</div>';
+  }catch(e){$("extras").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+  busyUI(false);
+};
+$("dialogue").onclick=async()=>{
+  if(busy||cur===null)return;busyUI(true,"Writing dialogue in character…");
+  try{
+    const who=world.characters[Math.floor(Math.random()*world.characters.length)].name;
+    const r=await api("dialogue",{world,scene_text:scenes[cur].text,character:who});
+    $("extras").innerHTML='<div class="dlg">'+(r.lines||[]).map(l=>`<div><b>${esc(l.speaker)}:</b> ${esc(l.line)}</div>`).join("")+"</div>";
+  }catch(e){$("extras").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+  busyUI(false);
+};
+$("restart").onclick=()=>{if(busy)return;$("play").classList.add("hide");$("setup").classList.remove("hide");$("setupMsg").innerHTML=""};
+
+function drawMap(){
+  const W=Math.max(300,uvNames.length*90+40),depth=new Map();
+  scenes.forEach(s=>depth.set(s.id,s.parent===null?0:depth.get(s.parent)+1));
+  const H=Math.max(...depth.values())*34+50,pos=s=>[40+s.uv*90,26+depth.get(s.id)*34];let out="";
+  scenes.forEach(s=>{if(s.parent!==null){const a=pos(scenes[s.parent]),b=pos(s);out+=`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="var(--line)" stroke-width="2"/>`}});
+  scenes.forEach(s=>{const[p,q]=pos(s);out+=`<circle cx="${p}" cy="${q}" r="${s.id===cur?9:6}" fill="${s.id===cur?"var(--acc2)":"var(--acc)"}"/>`});
+  uvNames.forEach((n,i)=>out+=`<text x="${40+i*90}" y="${H-6}" font-size="10" text-anchor="middle" fill="var(--mut)">${esc(n)}</text>`);
+  $("map").innerHTML=`<svg viewBox="0 0 ${W} ${H}">${out}</svg>`;
+}
+</script></body></html>
